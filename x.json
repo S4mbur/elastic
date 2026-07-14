@@ -1,0 +1,303 @@
+{
+  "description": "Top 10 table size diff by selected time range",
+  "width": 900,
+  "height": 360,
+  "autosize": "none",
+  "padding": {
+    "left": 360,
+    "right": 160,
+    "top": 25,
+    "bottom": 50
+  },
+  "data": [
+    {
+      "name": "raw",
+      "url": {
+        "%context%": true,
+        "%timefield%": "@timestamp",
+        "index": "oracle-space-dashboard-v5",
+        "body": {
+          "size": 100000,
+          "_source": [
+            "metric_group",
+            "entity_name",
+            "current_size_mb",
+            "day_num",
+            "log_day_str",
+            "@timestamp"
+          ],
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "metric_group": "TABLE_DAILY"
+                  }
+                }
+              ]
+            }
+          },
+          "sort": [
+            {
+              "day_num": {
+                "order": "asc"
+              }
+            }
+          ]
+        }
+      },
+      "format": {
+        "property": "hits.hits"
+      },
+      "transform": [
+        {
+          "type": "formula",
+          "as": "entity",
+          "expr": "datum._source.entity_name"
+        },
+        {
+          "type": "formula",
+          "as": "sizeMb",
+          "expr": "+datum._source.current_size_mb"
+        },
+        {
+          "type": "formula",
+          "as": "dayNum",
+          "expr": "+datum._source.day_num"
+        },
+        {
+          "type": "formula",
+          "as": "day",
+          "expr": "datum._source.log_day_str"
+        },
+        {
+          "type": "filter",
+          "expr": "datum.entity != null && isValid(datum.sizeMb) && isValid(datum.dayNum)"
+        }
+      ]
+    },
+    {
+      "name": "first_rows",
+      "source": "raw",
+      "transform": [
+        {
+          "type": "window",
+          "sort": {
+            "field": "dayNum",
+            "order": "ascending"
+          },
+          "ops": [
+            "row_number"
+          ],
+          "as": [
+            "rn"
+          ],
+          "groupby": [
+            "entity"
+          ]
+        },
+        {
+          "type": "filter",
+          "expr": "datum.rn == 1"
+        }
+      ]
+    },
+    {
+      "name": "last_rows",
+      "source": "raw",
+      "transform": [
+        {
+          "type": "window",
+          "sort": {
+            "field": "dayNum",
+            "order": "descending"
+          },
+          "ops": [
+            "row_number"
+          ],
+          "as": [
+            "rn"
+          ],
+          "groupby": [
+            "entity"
+          ]
+        },
+        {
+          "type": "filter",
+          "expr": "datum.rn == 1"
+        }
+      ]
+    },
+    {
+      "name": "diffs",
+      "source": "last_rows",
+      "transform": [
+        {
+          "type": "lookup",
+          "from": "first_rows",
+          "key": "entity",
+          "fields": [
+            "entity"
+          ],
+          "values": [
+            "sizeMb",
+            "day"
+          ],
+          "as": [
+            "firstSizeMb",
+            "firstDay"
+          ]
+        },
+        {
+          "type": "formula",
+          "as": "lastSizeMb",
+          "expr": "datum.sizeMb"
+        },
+        {
+          "type": "formula",
+          "as": "lastDay",
+          "expr": "datum.day"
+        },
+        {
+          "type": "formula",
+          "as": "diffMb",
+          "expr": "datum.firstSizeMb == null ? null : datum.lastSizeMb - datum.firstSizeMb"
+        },
+        {
+          "type": "formula",
+          "as": "pctChange",
+          "expr": "datum.firstSizeMb == null || datum.firstSizeMb == 0 ? null : ((datum.lastSizeMb - datum.firstSizeMb) / datum.firstSizeMb) * 100"
+        },
+        {
+          "type": "filter",
+          "expr": "datum.diffMb != null && isValid(datum.diffMb) && datum.dayNum != datum.first_rows_dayNum"
+        },
+        {
+          "type": "filter",
+          "expr": "datum.diffMb > 0"
+        },
+        {
+          "type": "collect",
+          "sort": {
+            "field": "diffMb",
+            "order": "descending"
+          }
+        },
+        {
+          "type": "window",
+          "ops": [
+            "row_number"
+          ],
+          "as": [
+            "rank"
+          ]
+        },
+        {
+          "type": "filter",
+          "expr": "datum.rank <= 10"
+        }
+      ]
+    }
+  ],
+  "scales": [
+    {
+      "name": "yscale",
+      "type": "band",
+      "domain": {
+        "data": "diffs",
+        "field": "entity"
+      },
+      "range": "height",
+      "padding": 0.18
+    },
+    {
+      "name": "xscale",
+      "type": "linear",
+      "domain": {
+        "data": "diffs",
+        "field": "diffMb"
+      },
+      "range": "width",
+      "nice": true,
+      "zero": true
+    }
+  ],
+  "axes": [
+    {
+      "orient": "left",
+      "scale": "yscale",
+      "title": "Table",
+      "labelLimit": 340,
+      "labelFontSize": 11
+    },
+    {
+      "orient": "bottom",
+      "scale": "xscale",
+      "title": "MB diff in selected time range",
+      "grid": true
+    }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": {
+        "data": "diffs"
+      },
+      "encode": {
+        "enter": {
+          "y": {
+            "scale": "yscale",
+            "field": "entity"
+          },
+          "height": {
+            "scale": "yscale",
+            "band": 1
+          },
+          "x": {
+            "scale": "xscale",
+            "value": 0
+          },
+          "x2": {
+            "scale": "xscale",
+            "field": "diffMb"
+          },
+          "tooltip": {
+            "signal": "datum.entity + '\\nFirst day: ' + datum.firstDay + '\\nFirst size: ' + format(datum.firstSizeMb, ',.2f') + ' MB\\nLast day: ' + datum.lastDay + '\\nLast size: ' + format(datum.lastSizeMb, ',.2f') + ' MB\\nDiff: ' + format(datum.diffMb, ',.2f') + ' MB\\nChange: ' + format(datum.pctChange, ',.2f') + '%'"
+          }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {
+        "data": "diffs"
+      },
+      "encode": {
+        "enter": {
+          "y": {
+            "scale": "yscale",
+            "field": "entity",
+            "band": 0.5
+          },
+          "x": {
+            "scale": "xscale",
+            "field": "diffMb",
+            "offset": 6
+          },
+          "align": {
+            "value": "left"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "fontSize": {
+            "value": 11
+          },
+          "text": {
+            "signal": "format(datum.diffMb, ',.2f') + ' MB / ' + format(datum.pctChange, ',.2f') + '%'"
+          }
+        }
+      }
+    }
+  ]
+}
