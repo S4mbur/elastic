@@ -1,0 +1,132 @@
+cat > /data/logstash/dashboards/tvssur-table.dashboard.json <<'JSON'
+{
+  "title": "tvssur-table",
+  "description": "Oracle table space dashboard. Source index: tvssur-table-space-v1.",
+  "time_range": {
+    "from": "now-120d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "grid": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 10
+      },
+      "type": "vis",
+      "config": {
+        "type": "xy",
+        "title": "Top 10 table total size MB",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM tvssur-table-space-v1 | WHERE metric_group == \"TABLE_DAILY\" AND @timestamp >= ?_tstart AND @timestamp < ?_tend | STATS size_mb = LAST(current_size_mb, @timestamp) BY entity_name | SORT size_mb DESC | LIMIT 10"
+            },
+            "x": {
+              "column": "entity_name"
+            },
+            "y": [
+              {
+                "column": "size_mb"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "grid": {
+        "x": 24,
+        "y": 0,
+        "w": 24,
+        "h": 10
+      },
+      "type": "vis",
+      "config": {
+        "type": "xy",
+        "title": "Top 10 non-partition table size MB",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM tvssur-table-space-v1 | WHERE metric_group == \"TABLE_ONLY_CURRENT\" AND @timestamp >= ?_tstart AND @timestamp < ?_tend | SORT current_size_mb DESC | LIMIT 10 | KEEP entity_name, current_size_mb"
+            },
+            "x": {
+              "column": "entity_name"
+            },
+            "y": [
+              {
+                "column": "current_size_mb"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "grid": {
+        "x": 0,
+        "y": 10,
+        "w": 24,
+        "h": 10
+      },
+      "type": "vis",
+      "config": {
+        "type": "xy",
+        "title": "Top 10 table growth MB in selected range",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM tvssur-table-space-v1 | WHERE metric_group == \"TABLE_DAILY\" AND @timestamp >= ?_tstart AND @timestamp < ?_tend | STATS first_size_mb = FIRST(current_size_mb, @timestamp), last_size_mb = LAST(current_size_mb, @timestamp) BY entity_name | EVAL diff_mb = last_size_mb - first_size_mb | WHERE diff_mb > 0 | SORT diff_mb DESC | LIMIT 10 | KEEP entity_name, diff_mb"
+            },
+            "x": {
+              "column": "entity_name"
+            },
+            "y": [
+              {
+                "column": "diff_mb"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "grid": {
+        "x": 24,
+        "y": 10,
+        "w": 24,
+        "h": 10
+      },
+      "type": "vis",
+      "config": {
+        "type": "xy",
+        "title": "Top 10 table growth % in selected range",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM tvssur-table-space-v1 | WHERE metric_group == \"TABLE_DAILY\" AND @timestamp >= ?_tstart AND @timestamp < ?_tend | STATS first_size_mb = FIRST(current_size_mb, @timestamp), last_size_mb = LAST(current_size_mb, @timestamp) BY entity_name | EVAL pct_change = CASE(first_size_mb == 0, null, (last_size_mb - first_size_mb) / first_size_mb * 100) | WHERE pct_change > 0 | SORT pct_change DESC | LIMIT 10 | KEEP entity_name, pct_change"
+            },
+            "x": {
+              "column": "entity_name"
+            },
+            "y": [
+              {
+                "column": "pct_change"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
+JSON
