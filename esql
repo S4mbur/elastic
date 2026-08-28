@@ -1,0 +1,14 @@
+FROM tvssur-table-space-v1
+| WHERE metric_group == "TABLE_DAILY"
+  AND log_date >= ?_tstart
+  AND log_date < ?_tend
+| STATS
+    first_size_mb = FIRST(current_size_mb, log_date),
+    last_size_mb  = LAST(current_size_mb, log_date)
+  BY entity_name
+| WHERE first_size_mb > 0 AND last_size_mb > first_size_mb
+| EVAL diff_mb = last_size_mb - first_size_mb
+| EVAL pct_change = diff_mb / first_size_mb
+| SORT pct_change DESC
+| LIMIT 10
+| KEEP entity_name, pct_change
