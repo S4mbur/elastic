@@ -1,0 +1,92 @@
+#!/bin/bash
+
+set -u
+
+source /data/logstash/tvssur_alert.env
+
+ES_API_KEY=$(cat "${ES_API_KEY_FILE}")
+
+HOST_NAME=$(hostname -s)
+
+TMP_JSON="/tmp/tvssur_weekly_total_datafiles_json.$$"
+TMP_BODY="/tmp/tvssur_weekly_total_datafiles_body.$$"
+
+trap 'rm -f "$TMP_JSON" "$TMP_BODY"' EXIT
+
+START_MS=$(( $(date -d '7 days ago 00:00:00' +%s) * 1000 ))
+END_MS=$(( $(date -d 'tomorrow 00:00:00' +%s) * 1000 ))
+
+START_TEXT=$(date -d '7 days ago 00:00:00' '+%Y-%m-%d %H:%M')
+END_TEXT=$(date -d 'tomorrow 00:00:00' '+%Y-%m-%d %H:%M')
+
+curl -kfsS \
+  -H "Authorization: ApiKey ${ES_API_KEY}" \
+  -X POST "${ES_URL}/_query" \
+  -H "Content-Type: application/json" \
+  -d @- > "$TMP_JSON" <<EOF
+{
+  "query": "FROM ${TABLE_INDEX} | WHERE metric_group == \"TOTAL_SPACE_DAILY\" AND object_name == \"${TOTAL_OBJECT_NAME}\" AND log_date >= TO_DATETIME(${START_MS}) AND log_date < TO_DATETIME(${END_MS}) | STATS first_size_mb = FIRST(total_space_mb, log_date), last_size_mb = LAST(total_space_mb, log_date), first_log_date = FIRST(log_date, log_date), last_log_date = LAST(log_date, log_date) | EVAL diff_mb = last_size_mb - first_size_mb | EVAL pct_change = CASE(first_size_mb == 0, null, ROUND(TO_DOUBLE(diff_mb) / TO_DOUBLE(first_size_mb) * 100, 2)) | KEEP first_log_date, last_log_date, first_size_mb, last_size_mb, diff_mb, pct_change"
+}
+EOF
+
+python3 - "$TMP_JSON" "$TMP_BODY" <<'PY'
+import json
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+
+with open(src) as f:
+    d = json.load(f)
+
+cols = [c["name"] for c in d.get("columns", [])]
+rows = d.get("values", [])
+
+def fmt_date(v):
+    if v is None:
+        return "-"
+    return str(v).replace("T", " ")[:19]
+
+def gb(mb):
+    return mb / 1024
+
+with open(dst, "w") as out:
+    if not rows:
+        out.write("TOTAL_DATAFILES için seçili aralıkta veri bulunamadı.\n")
+        sys.exit(0)
+
+    x = dict(zip(cols, rows[0]))
+
+    first = float(x.get("first_size_mb") or 0)
+    last = float(x.get("last_size_mb") or 0)
+    diff = float(x.get("diff_mb") or 0)
+    pct = float(x.get("pct_change") or 0)
+
+    out.write(f"İlk Tarih       : {fmt_date(x.get('first_log_date'))}\n")
+    out.write(f"Son Tarih       : {fmt_date(x.get('last_log_date'))}\n")
+    out.write(f"İlk Size        : {first:,.2f} MB ({gb(first):,.2f} GB)\n")
+    out.write(f"Şu Anki Size    : {last:,.2f} MB ({gb(last):,.2f} GB)\n")
+    out.write(f"Haftalık Fark   : {diff:,.2f} MB ({gb(diff):,.2f} GB)\n")
+    out.write(f"Haftalık Değişim: %{pct:,.2f}\n")
+PY
+
+(
+echo "To: ${MAIL_TO}"
+echo "Subject: [${HOST_NAME}] Haftalık TOTAL_DATAFILES Raporu - $(date '+%Y-%m-%d')"
+echo "MIME-Version: 1.0"
+echo "Content-Type: text/plain; charset=UTF-8"
+echo ""
+echo "Host            : ${HOST_NAME}"
+echo "Kontrol Aralığı : ${START_TEXT} - ${END_TEXT}"
+echo "Obje            : ${TOTAL_OBJECT_NAME}"
+echo ""
+echo "============================================================"
+echo "TOTAL_DATAFILES HAFTALIK DEĞİŞİM"
+echo "============================================================"
+echo ""
+cat "$TMP_BODY"
+echo ""
+echo "============================================================"
+echo "Bu mail Elasticsearch tvssur space monitoring tarafından otomatik oluşturulmuştur."
+echo ""
+
+) | /usr/sbin/sendmail.postfix -t
